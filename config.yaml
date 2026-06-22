@@ -1,0 +1,24 @@
+# WCPE Time-Shifted Radio Configuration
+
+# Source stream URL (WCPE 128kbps AAC via StreamTheWorld)
+stream_url: "http://playerservices.streamtheworld.com/api/livestream-redirect/WCPE_FMAAC128.aac"
+
+# Where to store recorded segments
+storage_dir: "./segments"
+
+# Segment duration in seconds (3600 = 1 hour)
+segment_seconds: 3600
+
+# Fallback delay (hours) when no timezone is detected.
+# Normally the server auto-calculates from the listener's timezone.
+# This is only used for direct /stream requests without a ?tz= parameter.
+delay_hours: 17
+
+# How long to keep segments (must be > delay_hours)
+retention_hours: 48
+
+# HTTP server port for the delayed stream
+server_port: 8234
+
+# Source stream bitrate in kbps (used for seek calculations)
+stream_bitrate_kbps: 128

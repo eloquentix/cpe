@@ -1,0 +1,16 @@
+[Unit]
+Description=WCPE Delayed Stream Server
+After=network-online.target wcpe-recorder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/dev/cpe
+ExecStart=/home/pi/dev/cpe/.venv/bin/python3 server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

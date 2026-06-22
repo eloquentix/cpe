@@ -1,0 +1,7 @@
+[Unit]
+Description=WCPE Segment Cleanup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pi/dev/cpe
+ExecStart=/home/pi/dev/cpe/.venv/bin/python3 cleanup.py

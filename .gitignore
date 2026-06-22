@@ -1,0 +1,8 @@
+.venv/
+segments/
+__pycache__/
+*.pyc
+*.log
+duckdns.env
+.claude/settings.local.json
+.DS_Store

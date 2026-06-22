@@ -1,0 +1,16 @@
+[Unit]
+Description=WCPE Stream Recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/dev/cpe
+ExecStart=/home/pi/dev/cpe/.venv/bin/python3 recorder.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
