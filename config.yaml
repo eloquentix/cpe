@@ -17,6 +17,12 @@ delay_hours: 17
 # How long to keep segments (must be > delay_hours)
 retention_hours: 48
 
+# Restart the recorder if no segment file has been written for this long
+stall_seconds: 300
+
+# Max simultaneous listeners (each one runs an ffmpeg process)
+max_streams: 4
+
 # HTTP server port for the delayed stream
 server_port: 8234
 

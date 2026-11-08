@@ -10,6 +10,7 @@ import http.server
 import json
 import re
 import subprocess
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,10 @@ import yaml
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 SEGMENT_RE = re.compile(r"wcpe_(\d{8}_\d{6})\.mp3$")
 WCPE_TZ = ZoneInfo("America/New_York")
+# A listener waiting on a gap writes nothing, so a dropped connection goes
+# unnoticed; give up after this long instead of holding a stream slot forever.
+GAP_TIMEOUT = 60
+MIN_RUN_BYTES = 16384  # less than ~1s of audio means ffmpeg found nothing to play
 
 
 def load_config():
@@ -108,6 +113,7 @@ fetch('/status?tz=' + tzParam)
   .then(d => {
     document.getElementById('delay').textContent = d.delay_hours;
     if (!d.ready) document.getElementById('delay').textContent += ' (buffering, not ready yet)';
+    if (!d.recording) document.getElementById('delay').textContent += ' (recorder not writing)';
   });
 
 if ('mediaSession' in navigator) {
@@ -193,6 +199,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         oldest = segs[0][0] if segs else None
         buffered = ((now - oldest).total_seconds() / 3600) if oldest else 0
+        write_age = (time.time() - segs[-1][1].stat().st_mtime) if segs else None
 
         body = json.dumps({
             "delay_hours": round(delay_hours, 1),
@@ -201,6 +208,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "newest": segs[-1][0].isoformat() if segs else None,
             "buffered_hours": round(buffered, 1),
             "ready": buffered >= delay_hours,
+            "last_write_seconds_ago": round(write_age) if write_age is not None else None,
+            "recording": write_age is not None and write_age < cfg.get("stall_seconds", 300),
         }, indent=2).encode()
 
         self.send_response(200)
@@ -221,6 +230,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         delay = timedelta(hours=delay_hours)
 
+        target = datetime.now(timezone.utc) - delay
+        if find_segment(available_segments(cfg["storage_dir"]), target) is None:
+            self.send_error(503, "Buffer not ready yet")
+            return
+
+        slots = self.server.stream_slots
+        if not slots.acquire(blocking=False):
+            self.send_error(503, "Too many listeners")
+            return
+        try:
+            self._serve_stream_body(cfg, delay, delay_hours)
+        finally:
+            slots.release()
+
+    def _serve_stream_body(self, cfg, delay, delay_hours):
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
         self.send_header("Connection", "close")
@@ -239,44 +263,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.log_message("stream ended")
 
     def _stream_loop(self, cfg, delay):
+        waited = 0
         while True:
             target = datetime.now(timezone.utc) - delay
             segs = available_segments(cfg["storage_dir"])
             seg = find_segment(segs, target)
 
-            if seg is None:
+            # No audio for this moment: buffer still filling, or target falls past
+            # the end of the last segment before a recorder outage.
+            if seg is None or self._play(seg, target) < MIN_RUN_BYTES:
+                waited += 5
+                if waited >= GAP_TIMEOUT:
+                    self.log_message("no audio for %ds, closing stream", waited)
+                    return
                 time.sleep(5)
-                continue
+            else:
+                waited = 0
 
-            start_time, path = seg
-            offset = max(0, (target - start_time).total_seconds())
+    def _play(self, seg, target):
+        """Stream one segment from the target offset; return bytes sent."""
+        start_time, path = seg
+        offset = max(0, (target - start_time).total_seconds())
+        sent = 0
 
-            proc = subprocess.Popen(
-                [
-                    "ffmpeg", "-v", "quiet",
-                    "-ss", f"{offset:.1f}",
-                    "-i", str(path),
-                    "-c", "copy", "-f", "mp3", "-re",
-                    "pipe:1",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
+        proc = subprocess.Popen(
+            [
+                "ffmpeg", "-v", "quiet",
+                "-re", "-ss", f"{offset:.1f}",
+                "-i", str(path),
+                "-c", "copy", "-f", "mp3",
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
 
+        try:
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                sent += len(chunk)
+        finally:
+            proc.terminate()
             try:
-                while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-            finally:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        return sent
 
 
 def main():
@@ -285,6 +322,7 @@ def main():
 
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     srv.config = cfg
+    srv.stream_slots = threading.BoundedSemaphore(cfg.get("max_streams", 4))
 
     print(f"WCPE delayed stream | port {port}")
     print(f"  Listen:  http://0.0.0.0:{port}/")

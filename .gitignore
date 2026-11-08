@@ -6,3 +6,4 @@ __pycache__/
 duckdns.env
 .claude/settings.local.json
 .DS_Store
+CLAUDE.md
